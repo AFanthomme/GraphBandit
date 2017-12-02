@@ -1,37 +1,48 @@
-import graph_tool as import gt
 import numpy as np
+from scipy.linalg import expm
+import pickle
 
 
 class GraphBandit:
     """
-    A GraphBandit is an oriented graph
+    A GraphBandit is an oriented graph with additional properties.
+
     """
 
-    def __init__(self, filename):
-        self.network = load_graph('saves/{}.gt'.format(filename))
-        self.sources = GraphView(self.network, vfilt=lambda v: v.ext_flow != 0).vertices()
-        self.state = None
+    def __init__(self, filename='simple'):
+        self.graph = np.loadtxt('saves/{}.graph'.format(filename))
+        self.ext_flow = np.loadtxt('saves/{}.extflow'.format(filename))
+        self.capacity = np.loadtxt('saves/{}.capacities'.format(filename))
+        self.nb_nodes = np.shape(self.graph)[0]
+
+        # Start with no stack and no flow
+        self.flow = np.zeros((self.nb_nodes, self.nb_nodes))
+        self.stack = np.zeros(self.nb_nodes)
+
+        # Start without a priori on the nodes
+        self.estimates = np.zeros(self.nb_nodes)
+
+        # Some parameters
+        self.time_scale = 0.1
 
     def evolution_step(self):
         # Use the current value of the flow to diffuse the stack
-        stack = self.network.vertex_properties["stack"]
-        capacity = self.network.vertex_properties["capacity"]
-        flow = self.network.vertex_properties["flow"].a
-        ext_flow = self.network.vertex_properties["ext_flow"].a
+        d = 1. / np.sqrt(np.sum(self.flow, axis=1))
+        laplacian = np.linalg.multi_dot([d, self.flow, d]) - np.eye(self.nb_nodes, self.nb_nodes)
 
-        diffusion_kernel = flow # Infinitesimal diffusion step with the current flow
-        stack.a = diffusion_kernel.dot(stack.a)
+        # Evolve using the exponential of the RW laplacian exp(tL) with a small time-step t.
+        self.stack = expm(self.time_scale * laplacian).dot(self.stack)
 
         # After evolution, get the external in and out flows
-        arrivals = np.zeros_like(ext_flow)
-        for i in range(self.network.num_vertices()):
-            if ext_flow[i] > 0:
-                arrivals[i] = np.random.poisson(ext_flow[i])
-            elif ext_flow[i] < 0:
-                arrivals[i] = ext_flow[i]
+        arrivals = np.zeros_like(self.ext_flow)
+        for i in range(self.nb_nodes):
+            if self.ext_flow[i] > 0:
+                arrivals[i] = np.random.poisson(self.ext_flow[i])
+            elif self.ext_flow[i] < 0:
+                arrivals[i] = self.ext_flow[i]
 
-        stack.a = np.max(np.min(stack.a + arrivals, capacity.a), 0)
-        reward = -np.sum(stack.a == capacity.a)    # Could be changed to penalize more large mistakes.
+        self.stack = np.max(np.min(self.stack + arrivals, self.capacity), 0)
+        reward = -np.sum(self.stack == self.capacity)    # Could be changed to penalize more large mistakes.
         return reward
 
     def flow_policy(self):
@@ -39,3 +50,5 @@ class GraphBandit:
         # evolution step.
         pass
 
+if __name__ == '__main__':
+    bandit = GraphBandit()
